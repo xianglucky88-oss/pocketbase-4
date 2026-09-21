@@ -59,6 +59,7 @@ window.app.components.recordFileThumb = function(propsArg = {}) {
         record: {},
         filename: "",
         extraClasses: "sm", // any .thumb related classes
+        signedLinks: true, // show the "generate/revoke signed download link" action
     });
 
     const watchers = app.utils.extendStore(props, propsArg);
@@ -75,7 +76,7 @@ window.app.components.recordFileThumb = function(propsArg = {}) {
         previewURL: undefined,
     });
 
-    return t.button(
+    const thumbBtn = t.button(
         {
             rid: props.rid,
             id: () => props.id,
@@ -146,5 +147,28 @@ window.app.components.recordFileThumb = function(propsArg = {}) {
 
             return t.i({ className: app.utils.fileTypeIcons[data.fileType] || "ri-file-line", ariaHidden: true });
         },
+    );
+
+    if (!props.signedLinks || !props.record?.id) {
+        return thumbBtn;
+    }
+
+    // wrap the thumb with a "signed download links" management toggle
+    return t.div(
+        { className: "thumb-with-actions" },
+        thumbBtn,
+        t.button(
+            {
+                type: "button",
+                className: "thumb-signed-links-btn btn icon sm",
+                title: "Generate or revoke signed download links",
+                ariaLabel: "Manage signed download links",
+                onclick: (e) => {
+                    e.stopPropagation();
+                    app.modals.openFileSignedLinks(props.record, props.filename);
+                },
+            },
+            t.i({ className: "ri-link" }),
+        ),
     );
 };

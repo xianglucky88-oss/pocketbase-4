@@ -1445,6 +1445,7 @@ func (app *BaseApp) registerBaseHooks() {
 	app.registerMFAHooks()
 	app.registerOTPHooks()
 	app.registerAuthOriginHooks()
+	app.registerFileTokenHooks()
 	app.registerNotifyWatcherHooks()
 }
 

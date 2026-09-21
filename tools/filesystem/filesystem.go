@@ -544,6 +544,21 @@ var manualExtensionContentTypes = map[string]string{
 // force "Content-Disposition: attachment" header.
 const forceAttachmentParam = "download"
 
+// Supported response disposition overrides for [System.ServeWithDisposition].
+const (
+	// DispositionAuto preserves the default behavior (inline for
+	// inline-able content types, attachment for everything else, with
+	// support for the `download` query parameter).
+	DispositionAuto = "auto"
+
+	// DispositionInline forces "Content-Disposition: inline".
+	DispositionInline = "inline"
+
+	// DispositionAttachment forces "Content-Disposition: attachment"
+	// regardless of the content type and the request query parameters.
+	DispositionAttachment = "attachment"
+)
+
 // Serve serves the file at fileKey location to an HTTP response.
 //
 // If the `download` query parameter is used the file will be always served for
@@ -552,6 +567,35 @@ const forceAttachmentParam = "download"
 // Internally this method uses [http.ServeContent] so Range requests,
 // If-Match, If-Unmodified-Since, etc. headers are handled transparently.
 func (s *System) Serve(res http.ResponseWriter, req *http.Request, fileKey string, name string) error {
+	return s.ServeWithDisposition(res, req, fileKey, name, DispositionAuto)
+}
+
+// ServeWithDisposition is the same as [System.Serve] but allows explicitly
+// overriding the response Content-Disposition behavior.
+//
+// Any value other than [DispositionAuto] is applied independently from
+// (and takes precedence over) the request `download` query parameter, making
+// it suitable for signed requests where the desired response type is part
+// of the signed payload and must not be changeable by the caller.
+//
+// Callers that need the query parameter to be ignored even in "auto" mode
+// (eg. signed URLs) should strip it from the request URL before calling
+// this method or use [System.ServeSigned].
+func (s *System) ServeWithDisposition(res http.ResponseWriter, req *http.Request, fileKey string, name string, disposition string) error {
+	return s.serve(res, req, fileKey, name, disposition, disposition == DispositionAuto)
+}
+
+// ServeSigned serves a file authorized through a signed URL.
+//
+// It behaves like [System.ServeWithDisposition] but the caller-controlled
+// `download` query parameter is always ignored - the disposition is
+// determined solely by the signed payload ("auto" keeps the content-type
+// based default without honoring query overrides).
+func (s *System) ServeSigned(res http.ResponseWriter, req *http.Request, fileKey string, name string, disposition string) error {
+	return s.serve(res, req, fileKey, name, disposition, false)
+}
+
+func (s *System) serve(res http.ResponseWriter, req *http.Request, fileKey string, name string, disposition string, allowQueryParam bool) error {
 	br, readErr := s.GetReader(fileKey)
 	if readErr != nil {
 		return readErr
@@ -559,24 +603,33 @@ func (s *System) Serve(res http.ResponseWriter, req *http.Request, fileKey strin
 	defer br.Close()
 
 	var forceAttachment bool
-	if raw := req.URL.Query().Get(forceAttachmentParam); raw != "" {
-		forceAttachment, _ = strconv.ParseBool(raw)
+	if allowQueryParam {
+		if raw := req.URL.Query().Get(forceAttachmentParam); raw != "" {
+			forceAttachment, _ = strconv.ParseBool(raw)
+		}
 	}
 
-	disposition := "attachment"
+	resolvedDisposition := "attachment"
 	realContentType := br.ContentType()
-	if !forceAttachment && list.ExistInSlice(realContentType, inlineServeContentTypes) {
-		disposition = "inline"
+	switch disposition {
+	case DispositionAttachment:
+		resolvedDisposition = "attachment"
+	case DispositionInline:
+		resolvedDisposition = "inline"
+	default: // auto
+		if !forceAttachment && list.ExistInSlice(realContentType, inlineServeContentTypes) {
+			resolvedDisposition = "inline"
+		}
 	}
 
 	// make an exception for specific content types and force a custom
-	// content type to send in the response so that it can be loaded properly
+	// content type to send in the response so it can be loaded properly
 	extContentType := realContentType
 	if ct, found := manualExtensionContentTypes[filepath.Ext(fileKey)]; found {
 		extContentType = ct
 	}
 
-	setHeaderIfMissing(res, "Content-Disposition", disposition+"; filename="+strconv.Quote(name))
+	setHeaderIfMissing(res, "Content-Disposition", resolvedDisposition+"; filename="+strconv.Quote(name))
 	setHeaderIfMissing(res, "Content-Type", extContentType)
 	setHeaderIfMissing(res, "Content-Security-Policy", "default-src 'none'; media-src 'self'; style-src 'unsafe-inline'; sandbox")
 

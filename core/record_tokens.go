@@ -12,6 +12,7 @@ import (
 const (
 	TokenTypeAuth          = "auth"
 	TokenTypeFile          = "file"
+	TokenTypeFileDownload  = "fileDownload"
 	TokenTypeVerification  = "verification"
 	TokenTypePasswordReset = "passwordReset"
 	TokenTypeEmailChange   = "emailChange"
@@ -162,4 +163,72 @@ func (m *Record) NewFileToken() (string, error) {
 		key,
 		m.Collection().FileToken.DurationTime(),
 	)
+}
+
+// NewFileDownloadToken generates a new revocable signed file download
+// JWT for a single file of the provided target record.
+//
+// Unlike [Record.NewFileToken], the returned token is bound to exactly
+// one collection/record/file/field and doesn't grant access to anything
+// else, making it suitable for sharing via email or external processing
+// services without browser cookies.
+//
+// The token is signed with the auth record's token key combined with its
+// collection FileToken secret (the same key material as the regular file
+// tokens), so rotating the record's tokenKey or changing the collection
+// file token secret invalidates all previously issued signed URLs.
+//
+// The signature binds the target collection, record, file field, filename,
+// expiration (exp) and the optional response disposition. The download
+// handler cross-checks every claim against the actual request path and
+// verifies that the returned jti hasn't been revoked.
+//
+// The returned id is the token's "jti" claim and is expected to be
+// persisted as a [FileToken] revocation row (with the same primary key).
+//
+// NB! The method doesn't perform access control or file existence checks;
+// the caller must verify those before minting and persisting the token.
+func (m *Record) NewFileDownloadToken(
+	target *Record,
+	fileField string,
+	filename string,
+	disposition string,
+	duration time.Duration,
+) (token string, id string, err error) {
+	if !m.Collection().IsAuth() {
+		return "", "", ErrNotAuthRecord
+	}
+
+	key := m.TokenKey() + m.Collection().FileToken.Secret
+	if key == "" {
+		return "", "", ErrMissingSigningKey
+	}
+
+	if duration <= 0 {
+		duration = m.Collection().FileToken.DurationTime()
+	}
+
+	// jti doubles as the revocation row id; keep it within the regular
+	// record id alphabet/length so the _fileTokens table can use it as PK.
+	id = security.PseudorandomStringWithAlphabet(DefaultIdLength, DefaultIdAlphabet)
+	now := time.Now()
+
+	token, err = security.NewJWT(
+		jwt.MapClaims{
+			TokenClaimType:            TokenTypeFileDownload,
+			TokenClaimId:              m.Id,
+			TokenClaimCollectionId:    m.Collection().Id,
+			TokenClaimFileCollection:  target.Collection().Id,
+			TokenClaimFileRecord:      target.Id,
+			TokenClaimFileField:       fileField,
+			TokenClaimFileFilename:    filename,
+			TokenClaimFileDisposition: normalizeFileTokenDisposition(disposition),
+			"iat":                     now.Unix(),
+			"jti":                     id,
+		},
+		key,
+		duration,
+	)
+
+	return token, id, err
 }

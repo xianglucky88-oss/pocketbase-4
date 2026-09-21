@@ -26,6 +26,7 @@
 @import "./map.css";
 @import "./recordSummary.css";
 @import "./recordFilePicker.css";
+@import "./fileSignedLinks.css";
 @import "./recordsPicker.css";
 @import "./recordFields.css";
 @import "./collectionModal.css";

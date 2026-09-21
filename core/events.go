@@ -423,6 +423,10 @@ type FileDownloadRequestEvent struct {
 	ServedPath string
 	ServedName string
 
+	// SignedDownloadClaims is populated when the request was authorized via
+	// a revocable signed download URL, otherwise it is nil.
+	SignedDownloadClaims *FileDownloadTokenClaims
+
 	// ThumbError indicates the a thumb wasn't able to be generated
 	// (e.g. because it didn't satisfy the support image formats or it timed out).
 	//

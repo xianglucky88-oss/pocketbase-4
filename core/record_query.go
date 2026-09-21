@@ -516,7 +516,7 @@ func (app *BaseApp) FindAuthRecordByToken(token string, validTypes ...string) (*
 	switch tokenType {
 	case TokenTypeAuth:
 		baseTokenKey = record.Collection().AuthToken.Secret
-	case TokenTypeFile:
+	case TokenTypeFile, TokenTypeFileDownload:
 		baseTokenKey = record.Collection().FileToken.Secret
 	case TokenTypeVerification:
 		baseTokenKey = record.Collection().VerificationToken.Secret
@@ -530,8 +530,12 @@ func (app *BaseApp) FindAuthRecordByToken(token string, validTypes ...string) (*
 
 	secret := record.TokenKey() + baseTokenKey
 
-	// verify token signature
-	_, err = security.ParseJWT(token, secret)
+	// verify token signature (signed download URLs allow a small clock skew)
+	if tokenType == TokenTypeFileDownload {
+		_, err = security.ParseJWTWithLeeway(token, secret, DownloadTokenLeeway)
+	} else {
+		_, err = security.ParseJWT(token, secret)
+	}
 	if err != nil {
 		return nil, err
 	}

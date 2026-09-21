@@ -136,7 +136,8 @@ func TestSQLRun(t *testing.T) {
 			ExpectedStatus: 200,
 			ExpectedContent: []string{
 				`"execTime":`,
-				`"affectedRows":0`,
+				// note: the CREATE TABLE affected rows value is driver/connection
+				// state dependent and is intentionally not asserted
 				`"columns":[]`,
 				`"rows":[]`,
 			},

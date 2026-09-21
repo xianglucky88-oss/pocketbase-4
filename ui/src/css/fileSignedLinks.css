@@ -1,0 +1,66 @@
+.thumb-with-actions {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+}
+
+.thumb-with-actions .thumb-signed-links-btn {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    width: 20px;
+    height: 20px;
+    min-height: 20px;
+    padding: 0;
+    border-radius: 50%;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: var(--surfaceColor);
+    border: 1px solid var(--surfaceAlt3Color);
+    color: var(--surfaceTxtHintColor);
+    z-index: 1;
+}
+
+.thumb-with-actions:hover .thumb-signed-links-btn,
+.thumb-signed-links-btn:focus-visible {
+    display: inline-flex;
+}
+
+.file-signed-links-modal .modal-body {
+    min-width: 520px;
+    max-width: 90vw;
+}
+
+.file-signed-links-form {
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 8px 10px;
+}
+
+.file-signed-links-target {
+    grid-template-columns: auto 1fr;
+    gap: 4px 10px;
+    align-items: center;
+}
+
+.file-signed-link-item {
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 6px 10px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--surfaceAlt3Color);
+}
+
+.file-signed-link-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.file-signed-link-url {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}

@@ -40,6 +40,7 @@ import "./settings/sync/importCollectionsReviewModal";
 import "./records/recordSummary";
 import "./records/recordsSearchbar";
 import "./records/recordFileThumb";
+import "./records/fileSignedLinksModal";
 import "./records/recordFilePickerModal";
 import "./records/recordsPickerModal";
 import "./records/recordPreviewModal";

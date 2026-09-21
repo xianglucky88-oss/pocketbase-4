@@ -14,6 +14,7 @@ import (
 	"github.com/pocketbase/pocketbase/tools/filesystem"
 	"github.com/pocketbase/pocketbase/tools/list"
 	"github.com/pocketbase/pocketbase/tools/router"
+	"github.com/pocketbase/pocketbase/tools/security"
 	"github.com/spf13/cast"
 	"golang.org/x/sync/semaphore"
 	"golang.org/x/sync/singleflight"
@@ -42,6 +43,9 @@ func bindFileApi(app core.App, rg *router.RouterGroup[*core.RequestEvent]) {
 
 	sub := rg.Group("/files")
 	sub.POST("/token", api.fileToken).Bind(RequireAuth())
+	sub.POST("/links", api.createFileLink).Bind(RequireAuth())
+	sub.GET("/links", api.listFileLinks).Bind(RequireAuth())
+	sub.DELETE("/links/{tokenId}", api.revokeFileLink).Bind(RequireAuth())
 	sub.GET("/{collection}/{recordId}/{filename}", api.download).Bind(collectionPathRateLimit("", "file"))
 }
 
@@ -105,6 +109,19 @@ func (api *fileApi) download(e *core.RequestEvent) error {
 		return e.NotFoundError("", nil)
 	}
 
+	queryToken := e.Request.URL.Query().Get("token")
+
+	// revocable signed download URLs are identified by their own token type;
+	// the validation logic is shared regardless of the configured storage backend
+	// (local filesystem or S3) since both serve through the same handler below.
+	var signedClaims *core.FileDownloadTokenClaims
+	if isFileDownloadToken(queryToken) {
+		signedClaims, err = e.App.VerifyFileDownloadToken(queryToken, collection.Id, record.Id, fileField.Name, filename)
+		if err != nil {
+			return e.NotFoundError("", err)
+		}
+	}
+
 	// check whether the request is authorized to view the protected file
 	if fileField.Protected {
 		originalRequestInfo, err := e.RequestInfo()
@@ -112,8 +129,15 @@ func (api *fileApi) download(e *core.RequestEvent) error {
 			return e.InternalServerError("Failed to load request info", err)
 		}
 
-		token := e.Request.URL.Query().Get("token")
-		authRecord, _ := e.App.FindAuthRecordByToken(token, core.TokenTypeFile)
+		var authRecord *core.Record
+		if signedClaims != nil {
+			// signed URLs authorize the download on behalf of the auth record
+			// that minted them; its current ViewRule is re-evaluated on each
+			// request below, so permission changes take effect immediately.
+			authRecord = signedClaims.AuthRecord
+		} else {
+			authRecord, _ = e.App.FindAuthRecordByToken(queryToken, core.TokenTypeFile)
+		}
 
 		// reset the auth state if it is superuser and it is not whitelisted
 		// (not critical because file tokens are short-lived but checked nonetheless as an extra precaution)
@@ -153,6 +177,15 @@ func (api *fileApi) download(e *core.RequestEvent) error {
 
 	originalPath := baseFilesPath + "/" + filename
 
+	// signed URLs must not be used to discover/access thumb variants and the
+	// file is re-checked to still exist before serving it (covers renames,
+	// deletes and external storage changes for both local and S3 backends).
+	if signedClaims != nil {
+		if exists, _ := fsys.Exists(originalPath); !exists {
+			return e.NotFoundError("", errors.New("the signed file no longer exists"))
+		}
+	}
+
 	event := new(core.FileDownloadRequestEvent)
 	event.RequestEvent = e
 	event.Collection = collection
@@ -160,9 +193,14 @@ func (api *fileApi) download(e *core.RequestEvent) error {
 	event.FileField = fileField
 	event.ServedPath = originalPath
 	event.ServedName = filename
+	event.SignedDownloadClaims = signedClaims
 
 	// check for valid thumb size param
-	thumbSize := e.Request.URL.Query().Get("thumb")
+	// (ignored for signed downloads - signed URLs always serve the original file)
+	var thumbSize string
+	if signedClaims == nil {
+		thumbSize = e.Request.URL.Query().Get("thumb")
+	}
 	if thumbSize != "" && (list.ExistInSlice(thumbSize, defaultThumbSizes) || list.ExistInSlice(thumbSize, fileField.Thumbs)) {
 		// extract the original file meta attributes and check it existence
 		oAttrs, oAttrsErr := fsys.Attributes(originalPath)
@@ -204,9 +242,35 @@ func (api *fileApi) download(e *core.RequestEvent) error {
 	// (note: it is out of the hook to allow users to customize the behavior)
 	e.Response.Header().Del("X-Frame-Options")
 
+	// signed responses must not be stored in shared caches because they
+	// contain per-URL authorization and can be revoked at any time
+	if signedClaims != nil {
+		e.Response.Header().Set("Cache-Control", "private, no-store")
+	}
+
 	return e.App.OnFileDownloadRequest().Trigger(event, func(e *core.FileDownloadRequestEvent) error {
+		if e.SignedDownloadClaims != nil {
+			// final revocation re-check as close as possible to reading the file,
+			// narrowing the race window with a concurrent revoke/delete
+			if _, err := e.App.FindFileTokenById(e.SignedDownloadClaims.JTI); err != nil {
+				return e.NotFoundError("", errors.New("the signed download URL has been revoked"))
+			}
+		}
+
 		err = execAfterSuccessTx(true, e.App, func() error {
-			return fsys.Serve(e.Response, e.Request, e.ServedPath, e.ServedName)
+			disposition := filesystem.DispositionAuto
+			if e.SignedDownloadClaims != nil {
+				switch e.SignedDownloadClaims.Disposition {
+				case core.FileTokenDispositionInline:
+					disposition = filesystem.DispositionInline
+				case core.FileTokenDispositionAttachment:
+					disposition = filesystem.DispositionAttachment
+				}
+
+				return fsys.ServeSigned(e.Response, e.Request, e.ServedPath, e.ServedName, disposition)
+			}
+
+			return fsys.ServeWithDisposition(e.Response, e.Request, e.ServedPath, e.ServedName, disposition)
 		})
 		if err != nil {
 			return e.NotFoundError("", err)
@@ -214,6 +278,23 @@ func (api *fileApi) download(e *core.RequestEvent) error {
 
 		return nil
 	})
+}
+
+// isFileDownloadToken performs a cheap type sniff of the unverified JWT
+// to distinguish revocable signed download tokens from the legacy file tokens.
+func isFileDownloadToken(token string) bool {
+	if token == "" {
+		return false
+	}
+
+	claims, err := security.ParseUnverifiedJWTWithLeeway(token, core.DownloadTokenLeeway)
+	if err != nil {
+		return false
+	}
+
+	tokenType, _ := claims[core.TokenClaimType].(string)
+
+	return tokenType == core.TokenTypeFileDownload
 }
 
 func (api *fileApi) createThumb(

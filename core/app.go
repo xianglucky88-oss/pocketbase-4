@@ -567,6 +567,31 @@ type App interface {
 
 	// ---------------------------------------------------------------
 
+	// FindFileTokenById returns a single non-expired FileToken by its id
+	// (the jti of a signed download URL).
+	FindFileTokenById(id string) (*FileToken, error)
+
+	// FindAllFileTokensByTargetRecord returns all still valid FileToken rows
+	// pointing to the provided target record.
+	FindAllFileTokensByTargetRecord(target *Record) ([]*FileToken, error)
+
+	// DeleteFileToken revokes a single signed download URL by deleting its
+	// FileToken row.
+	DeleteFileToken(token *FileToken) error
+
+	// DeleteAllFileTokensByTargetRecord revokes all signed download URLs
+	// pointing to the provided target record.
+	DeleteAllFileTokensByTargetRecord(target *Record) error
+
+	// DeleteExpiredFileTokens deletes all expired FileToken rows.
+	DeleteExpiredFileTokens() error
+
+	// VerifyFileDownloadToken verifies a signed file download token for the
+	// provided collection/record/field/filename request context.
+	VerifyFileDownloadToken(token string, collectionID string, recordID string, field string, filename string) (*FileDownloadTokenClaims, error)
+
+	// ---------------------------------------------------------------
+
 	// RecordQuery returns a new Record select query from a collection model, id or name.
 	//
 	// In case a collection id or name is provided and that collection doesn't
