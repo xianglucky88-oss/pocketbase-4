@@ -193,6 +193,22 @@ export function input(props) {
                             {
                                 type: "button",
                                 className: "btn sm secondary transparent circle",
+                                ariaLabel: app.attrs.tooltip("Generate signed download URL"),
+                                title: "Generate short-lived signed download URL",
+                                hidden: () => isDeleted(nameOrFile),
+                                onclick: () =>
+                                    app.modals.openSignedFileUrl({
+                                        record: props.record,
+                                        filename: nameOrFile,
+                                        field: props.field.name,
+                                    }),
+                            },
+                            t.i({ className: "ri-link-m", ariaHidden: true }),
+                        ),
+                        t.button(
+                            {
+                                type: "button",
+                                className: "btn sm secondary transparent circle",
                                 ariaLabel: app.attrs.tooltip("Remove file"),
                                 hidden: () => isDeleted(nameOrFile),
                                 onclick: () => toDelete(nameOrFile),

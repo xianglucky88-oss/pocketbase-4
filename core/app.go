@@ -689,6 +689,58 @@ type App interface {
 	//	if ok, _ := app.CanAccessRecord(record, requestInfo, rule); ok { ... }
 	CanAccessRecord(record *Record, requestInfo *RequestInfo, accessRule *string) (bool, error)
 
+	// ---------------------------------------------------------------
+	// Signed file download tokens
+	// ---------------------------------------------------------------
+
+	// NewSignedFileToken issues a new short-lived, revocable signed file
+	// download token for the provided record file.
+	//
+	// The token is cryptographically bound to the collection, record, file field,
+	// filename, expiry and (optionally) the forced download response type and
+	// is persisted in the auxiliary db so that it can be later revoked.
+	NewSignedFileToken(opts SignedFileTokenOptions) (*SignedFileTokenResult, error)
+
+	// RedeemSignedFileToken verifies a signed file download token against the
+	// requested collection/record/field/file and re-checks the record visibility,
+	// the file field membership and the physical file existence before serving.
+	//
+	// This is the single shared verification entry point used by the file
+	// download API regardless of whether the storage backend is the local FS or S3.
+	RedeemSignedFileToken(
+		tokenString string,
+		requestedCollectionNameOrId string,
+		requestedRecordId string,
+		requestedFileField string,
+		requestedFilename string,
+	) (*SignedFileTokenRedemption, error)
+
+	// FindSignedFileTokenById finds a single (active or inactive) signed file token by its id/jti.
+	FindSignedFileTokenById(id string) (*SignedFileToken, error)
+
+	// FindActiveSignedFileTokens returns the non-revoked, non-expired signed file
+	// tokens matching the provided filter.
+	FindActiveSignedFileTokens(filter SignedFileTokenListFilter) ([]*SignedFileToken, error)
+
+	// RevokeSignedFileToken marks a single signed file token as revoked.
+	//
+	// The revocation is concurrency-safe (a concurrently revoked token can't be
+	// resurrected) and idempotent.
+	RevokeSignedFileToken(id string) error
+
+	// RevokeSignedFileTokens bulk marks all active signed file tokens matching
+	// the provided (non-empty) filter as revoked.
+	//
+	// Returns the number of revoked tokens.
+	RevokeSignedFileTokens(filter SignedFileTokenListFilter) (int64, error)
+
+	// RevokeAllSignedFileTokensForFile revokes every active signed file token
+	// bound to the provided collection/record/field/filename tuple.
+	RevokeAllSignedFileTokensForFile(collectionId, recordId, fileField, filename string) (int64, error)
+
+	// DeleteExpiredSignedFileTokens permanently deletes expired signed file token rows.
+	DeleteExpiredSignedFileTokens() error
+
 	// ExpandRecord expands the relations of a single Record model.
 	//
 	// If optFetchFunc is not set, then a default function will be used
@@ -1330,6 +1382,18 @@ type App interface {
 	// then all event handlers registered via the created hook will be
 	// triggered and called only if their event data origin matches the tags.
 	OnFileTokenRequest(tags ...string) *hook.TaggedHook[*FileTokenRequestEvent]
+
+	// OnSignedFileTokenRequest hook is triggered on each signed file token/URL
+	// issuance request.
+	//
+	// If the optional "tags" list (Collection ids or names) is specified,
+	// then the event handlers registered via the created hook will be
+	// triggered and called only if their event data origin matches the tags.
+	OnSignedFileTokenRequest(tags ...string) *hook.TaggedHook[*SignedFileTokenRequestEvent]
+
+	// OnSignedFileTokenRevokeRequest hook is triggered before a signed file
+	// token is revoked via the superuser management API.
+	OnSignedFileTokenRevokeRequest() *hook.Hook[*SignedFileTokenRevokeEvent]
 
 	// ---------------------------------------------------------------
 	// Record Auth API event hooks

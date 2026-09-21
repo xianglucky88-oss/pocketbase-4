@@ -14,6 +14,7 @@ import (
 	"github.com/pocketbase/pocketbase/tools/router"
 	"github.com/pocketbase/pocketbase/tools/search"
 	"github.com/pocketbase/pocketbase/tools/subscriptions"
+	"github.com/pocketbase/pocketbase/tools/types"
 	"golang.org/x/crypto/acme/autocert"
 )
 
@@ -411,6 +412,57 @@ type FileTokenRequestEvent struct {
 	baseRecordEventData
 
 	Token string
+}
+
+// SignedFileTokenRequestEvent is triggered when a new revocable signed
+// file download token/URL is being issued.
+//
+// Handlers may inspect the bound file target and mutate the returned Token/URL.
+type SignedFileTokenRequestEvent struct {
+	hook.Event
+	*RequestEvent
+
+	Collection *Collection
+	Record     *Record
+	FileField  *FileField
+	Filename   string
+
+	// Token is the raw signed JWT.
+	Token string
+
+	// URL is the ready-to-use signed download URL.
+	URL string
+
+	// Disposition is the forced download response type ("", "inline" or "attachment").
+	Disposition string
+
+	// ExpiresAt is the token expiry time.
+	ExpiresAt types.DateTime
+}
+
+// Tags implements [hook.Tagger] and tags the event with the file owner
+// collection's id/name, allowing collection-scoped hook subscriptions.
+func (e *SignedFileTokenRequestEvent) Tags() []string {
+	if e.Collection == nil {
+		return nil
+	}
+
+	tags := make([]string, 0, 2)
+	if e.Collection.Id != "" {
+		tags = append(tags, e.Collection.Id)
+	}
+	if e.Collection.Name != "" {
+		tags = append(tags, e.Collection.Name)
+	}
+	return tags
+}
+
+// SignedFileTokenRevokeEvent is triggered before a signed file token is revoked.
+type SignedFileTokenRevokeEvent struct {
+	hook.Event
+	*RequestEvent
+
+	TokenId string
 }
 
 type FileDownloadRequestEvent struct {

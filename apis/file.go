@@ -105,8 +105,32 @@ func (api *fileApi) download(e *core.RequestEvent) error {
 		return e.NotFoundError("", nil)
 	}
 
+	// revocable signed download URL (works for both public and protected files
+	// and is independent of browser cookies/session tokens).
+	//
+	// When present it takes precedence over the regular session file token and
+	// performs its own full verification (signature, expiry, revocation, record
+	// visibility, field membership and physical file existence).
+	var signedRedemption *core.SignedFileTokenRedemption
+	if signedToken := e.Request.URL.Query().Get(signedFileTokenParam); signedToken != "" {
+		redemption, redeemErr := e.App.RedeemSignedFileToken(
+			signedToken,
+			collection.Name,
+			recordId,
+			fileField.Name,
+			filename,
+		)
+		if redeemErr != nil {
+			// all failures are normalized to 404 to avoid leaking resource existence
+			return e.NotFoundError("", redeemErr)
+		}
+		signedRedemption = redemption
+	}
+
 	// check whether the request is authorized to view the protected file
-	if fileField.Protected {
+	// (skipped when a valid signed download URL was presented - it was already
+	// authorized at redeem time, bound to this exact file)
+	if fileField.Protected && signedRedemption == nil {
 		originalRequestInfo, err := e.RequestInfo()
 		if err != nil {
 			return e.InternalServerError("Failed to load request info", err)
@@ -161,9 +185,20 @@ func (api *fileApi) download(e *core.RequestEvent) error {
 	event.ServedPath = originalPath
 	event.ServedName = filename
 
+	// the signed URL is bound to the original file only - thumb transformations
+	// are not part of the signature, so reject a "thumb" param to prevent an
+	// attacker-controlled derived path from being served under a signed request
+	signedDisposition := ""
+	if signedRedemption != nil {
+		signedDisposition = signedRedemption.Disposition
+		if e.Request.URL.Query().Get("thumb") != "" {
+			return e.NotFoundError("", errors.New("thumb transformations are not allowed with a signed download URL"))
+		}
+	}
+
 	// check for valid thumb size param
 	thumbSize := e.Request.URL.Query().Get("thumb")
-	if thumbSize != "" && (list.ExistInSlice(thumbSize, defaultThumbSizes) || list.ExistInSlice(thumbSize, fileField.Thumbs)) {
+	if signedRedemption == nil && thumbSize != "" && (list.ExistInSlice(thumbSize, defaultThumbSizes) || list.ExistInSlice(thumbSize, fileField.Thumbs)) {
 		// extract the original file meta attributes and check it existence
 		oAttrs, oAttrsErr := fsys.Attributes(originalPath)
 		if oAttrsErr != nil {
@@ -204,8 +239,16 @@ func (api *fileApi) download(e *core.RequestEvent) error {
 	// (note: it is out of the hook to allow users to customize the behavior)
 	e.Response.Header().Del("X-Frame-Options")
 
+	// don't leak the (capability-bearing) signed URL via the Referer header
+	if signedRedemption != nil {
+		e.Response.Header().Set("Referrer-Policy", "no-referrer")
+	}
+
 	return e.App.OnFileDownloadRequest().Trigger(event, func(e *core.FileDownloadRequestEvent) error {
 		err = execAfterSuccessTx(true, e.App, func() error {
+			if signedDisposition != "" {
+				return fsys.ServeWithDisposition(e.Response, e.Request, e.ServedPath, e.ServedName, signedDisposition)
+			}
 			return fsys.Serve(e.Response, e.Request, e.ServedPath, e.ServedName)
 		})
 		if err != nil {

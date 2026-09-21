@@ -171,8 +171,10 @@ type BaseApp struct {
 	onSettingsReload        *hook.Hook[*SettingsReloadEvent]
 
 	// file api event hooks
-	onFileDownloadRequest *hook.Hook[*FileDownloadRequestEvent]
-	onFileTokenRequest    *hook.Hook[*FileTokenRequestEvent]
+	onFileDownloadRequest          *hook.Hook[*FileDownloadRequestEvent]
+	onFileTokenRequest             *hook.Hook[*FileTokenRequestEvent]
+	onSignedFileTokenRequest       *hook.Hook[*SignedFileTokenRequestEvent]
+	onSignedFileTokenRevokeRequest *hook.Hook[*SignedFileTokenRevokeEvent]
 
 	// record auth API event hooks
 	onRecordAuthRequest                 *hook.Hook[*RecordAuthRequestEvent]
@@ -325,6 +327,8 @@ func (app *BaseApp) initHooks() {
 	// file API event hooks
 	app.onFileDownloadRequest = &hook.Hook[*FileDownloadRequestEvent]{}
 	app.onFileTokenRequest = &hook.Hook[*FileTokenRequestEvent]{}
+	app.onSignedFileTokenRequest = &hook.Hook[*SignedFileTokenRequestEvent]{}
+	app.onSignedFileTokenRevokeRequest = &hook.Hook[*SignedFileTokenRevokeEvent]{}
 
 	// record auth API event hooks
 	app.onRecordAuthRequest = &hook.Hook[*RecordAuthRequestEvent]{}
@@ -434,6 +438,17 @@ func (app *BaseApp) Bootstrap() error {
 		}
 
 		if err := app.RunSystemMigrations(); err != nil {
+			return err
+		}
+
+		// ensure the (aux db) revocable signed-file-tokens table exists.
+		//
+		// note: this is intentionally created directly on the auxiliary db
+		// instead of through a regular system migration to avoid a modernc
+		// sqlite driver quirk where the migrations runner's nested
+		// cross-database transaction perturbs the subsequently reported
+		// RowsAffected for DDL statements on the main database.
+		if err := app.initSignedFileTokensTable(); err != nil {
 			return err
 		}
 
@@ -1122,6 +1137,14 @@ func (app *BaseApp) OnFileTokenRequest(tags ...string) *hook.TaggedHook[*FileTok
 	return hook.NewTaggedHook(app.onFileTokenRequest, tags...)
 }
 
+func (app *BaseApp) OnSignedFileTokenRequest(tags ...string) *hook.TaggedHook[*SignedFileTokenRequestEvent] {
+	return hook.NewTaggedHook(app.onSignedFileTokenRequest, tags...)
+}
+
+func (app *BaseApp) OnSignedFileTokenRevokeRequest() *hook.Hook[*SignedFileTokenRevokeEvent] {
+	return app.onSignedFileTokenRevokeRequest
+}
+
 // -------------------------------------------------------------------
 // Record auth API event hooks
 // -------------------------------------------------------------------
@@ -1445,6 +1468,7 @@ func (app *BaseApp) registerBaseHooks() {
 	app.registerMFAHooks()
 	app.registerOTPHooks()
 	app.registerAuthOriginHooks()
+	app.registerSignedFileTokenHooks()
 	app.registerNotifyWatcherHooks()
 }
 

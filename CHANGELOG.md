@@ -1,3 +1,8 @@
+## Unreleased
+
+- Added revocable, short-lived signed file download URLs (`POST /api/files/signed-token`) that don't depend on browser cookies and are suitable for embedding in emails or handing to external processing services.
+    _The signature is cryptographically bound to the collection, record, file field, filename, expiry and an optional response type; the record visibility, the file's field membership and its physical existence are re-checked before serving, and URLs can be revoked via the superuser management API or are invalidated automatically when the file is renamed/removed or the record is deleted._
+
 ## v0.40.3
 
 - Write the status header for JSON responses only if the fields picker succeed or has acceptable fallback.

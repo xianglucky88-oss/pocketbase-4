@@ -88,6 +88,15 @@ window.app.components.recordFileThumb = function(propsArg = {}) {
             onclick: async (e) => {
                 e.stopPropagation();
 
+                // shift/ctrl+click opens the signed-URL generator for superusers
+                if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                    app.modals.openSignedFileUrl({
+                        record: props.record,
+                        filename: props.filename,
+                    });
+                    return;
+                }
+
                 async function resolveURL() {
                     const token = await app.getFileToken(props.record.collectionId);
                     return app.pb.files.getURL(props.record, props.filename, { token });

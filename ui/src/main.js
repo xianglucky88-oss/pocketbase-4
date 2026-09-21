@@ -32,6 +32,7 @@ import "./base/credits";
 import "./base/searchbar";
 import "./base/uploadedFileThumb";
 import "./base/filePreviewModal";
+import "./base/signedFileUrlModal";
 import "./base/erd";
 import "./base/pageSidebar";
 import "./apiPreview/apiPreviewModal";

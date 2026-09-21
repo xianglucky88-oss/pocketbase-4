@@ -544,6 +544,13 @@ var manualExtensionContentTypes = map[string]string{
 // force "Content-Disposition: attachment" header.
 const forceAttachmentParam = "download"
 
+// Supported explicit disposition values for [System.ServeWithDisposition].
+const (
+	DispositionAuto       = ""
+	DispositionInline     = "inline"
+	DispositionAttachment = "attachment"
+)
+
 // Serve serves the file at fileKey location to an HTTP response.
 //
 // If the `download` query parameter is used the file will be always served for
@@ -552,25 +559,53 @@ const forceAttachmentParam = "download"
 // Internally this method uses [http.ServeContent] so Range requests,
 // If-Match, If-Unmodified-Since, etc. headers are handled transparently.
 func (s *System) Serve(res http.ResponseWriter, req *http.Request, fileKey string, name string) error {
+	return s.ServeWithDisposition(res, req, fileKey, name, DispositionAuto)
+}
+
+// ServeWithDisposition is like [System.Serve] but allows the caller to
+// explicitly force the Content-Disposition behavior.
+//
+// disposition accepts:
+//   - DispositionAuto ("")   - content-type driven default (inline for images/pdf/video, attachment otherwise);
+//     the `download` query param is still honored to force attachment
+//   - DispositionInline      - always inline
+//   - DispositionAttachment  - always attachment (the `download` query param is ignored)
+//
+// Invalid values fall back to DispositionAuto.
+//
+// The same code path is used for both the local filesystem and S3 drivers
+// because the underlying blob bucket abstracts them away.
+func (s *System) ServeWithDisposition(res http.ResponseWriter, req *http.Request, fileKey string, name string, disposition string) error {
 	br, readErr := s.GetReader(fileKey)
 	if readErr != nil {
 		return readErr
 	}
 	defer br.Close()
 
-	var forceAttachment bool
-	if raw := req.URL.Query().Get(forceAttachmentParam); raw != "" {
-		forceAttachment, _ = strconv.ParseBool(raw)
+	switch disposition {
+	case DispositionInline, DispositionAttachment:
+		// explicit
+	default:
+		disposition = DispositionAuto
 	}
 
-	disposition := "attachment"
-	realContentType := br.ContentType()
-	if !forceAttachment && list.ExistInSlice(realContentType, inlineServeContentTypes) {
-		disposition = "inline"
+	if disposition == DispositionAuto {
+		disposition = "attachment"
+		realContentType := br.ContentType()
+
+		var forceAttachment bool
+		if raw := req.URL.Query().Get(forceAttachmentParam); raw != "" {
+			forceAttachment, _ = strconv.ParseBool(raw)
+		}
+
+		if !forceAttachment && list.ExistInSlice(realContentType, inlineServeContentTypes) {
+			disposition = "inline"
+		}
 	}
 
 	// make an exception for specific content types and force a custom
 	// content type to send in the response so that it can be loaded properly
+	realContentType := br.ContentType()
 	extContentType := realContentType
 	if ct, found := manualExtensionContentTypes[filepath.Ext(fileKey)]; found {
 		extContentType = ct
@@ -580,15 +615,24 @@ func (s *System) Serve(res http.ResponseWriter, req *http.Request, fileKey strin
 	setHeaderIfMissing(res, "Content-Type", extContentType)
 	setHeaderIfMissing(res, "Content-Security-Policy", "default-src 'none'; media-src 'self'; style-src 'unsafe-inline'; sandbox")
 
-	// set a default cache-control header
-	// (valid for 30 days but the cache is allowed to reuse the file for any requests
-	// that are made in the last day while revalidating the res in the background)
-	setHeaderIfMissing(res, "Cache-Control", "max-age=2592000, stale-while-revalidate=86400")
+	// signed/short-lived downloads must not be stored by shared caches
+	if req.URL.Query().Get(signedTokenQueryParamAlias) != "" {
+		setHeaderIfMissing(res, "Cache-Control", "private, no-store")
+	} else {
+		// set a default cache-control header
+		// (valid for 30 days but the cache is allowed to reuse the file for any requests
+		// that are made in the last day while revalidating the res in the background)
+		setHeaderIfMissing(res, "Cache-Control", "max-age=2592000, stale-while-revalidate=86400")
+	}
 
 	http.ServeContent(res, req, name, br.ModTime(), br)
 
 	return nil
 }
+
+// signedTokenQueryParamAlias mirrors apis.signedFileTokenParam; duplicated as
+// a const here to avoid an import cycle between tools/filesystem and apis.
+const signedTokenQueryParamAlias = "signature"
 
 // note: expects key to be in a canonical form (eg. "accept-encoding" should be "Accept-Encoding").
 func setHeaderIfMissing(res http.ResponseWriter, key string, value string) {

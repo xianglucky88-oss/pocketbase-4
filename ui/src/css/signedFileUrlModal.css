@@ -1,0 +1,11 @@
+/* Revocable signed file download URL modal */
+.signed-file-url-modal {
+    .signed-file-url-result {
+        .signed-file-url-text {
+            word-break: break-all;
+            user-select: all;
+            font-family: var(--monoFontFamily, monospace);
+            font-size: var(--smFontSize);
+        }
+    }
+}
